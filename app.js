@@ -5,6 +5,8 @@ const MAX_SIZE = 12 * 1024 * 1024;
 let dataset = null, views = [], activeDay = 'all', requestId = 0;
 
 function normalizeData(raw) {
+  const serverId = !Array.isArray(raw) ? String(raw?.server_id || raw?.region || '').toLowerCase() : '';
+  if(raw?.server_id && raw?.region && raw.server_id !== raw.region)throw new Error('서버 정보가 서로 다릅니다. 서버별로 따로 저장한 JSON을 사용하세요.');
   const rows = Array.isArray(raw) ? raw : raw?.buffs;
   if (!Array.isArray(rows)) throw new Error('버프 배열 또는 buffs 배열이 있는 JSON이 필요합니다.');
   if (rows.length > 30000) throw new Error('버프는 최대 30,000행까지 지원합니다.');
@@ -24,12 +26,14 @@ function normalizeData(raw) {
     start:validTimestamp(s.start), end:validTimestamp(s.end), boundary1:validTimestamp(s.boundary1),
     description:typeof s.description==='string'?s.description:''
   }));
-  return {buffs, seasons, region: !Array.isArray(raw) && typeof raw.region==='string' ? raw.region : '', exportedAt: !Array.isArray(raw) && typeof raw.exported_at==='string' ? raw.exported_at : ''};
+  return {buffs, seasons, serverId, previewOnly:serverId==='cn'||raw?.preview_only===true,
+    timeZone:serverId==='cn'?'Asia/Shanghai':'Asia/Seoul',
+    region: !Array.isArray(raw) && typeof raw.region==='string' ? raw.region : '', exportedAt: !Array.isArray(raw) && typeof raw.exported_at==='string' ? raw.exported_at : ''};
 }
 function validTimestamp(n) {return Number.isFinite(n) && n>0 && n<4102444800 ? n : null;}
 function el(tag, cls, text) {const node=document.createElement(tag); if(cls)node.className=cls;if(text!==undefined)node.textContent=text;return node;}
 function dateText(ts, time=false) {
-  return new Intl.DateTimeFormat('ko-KR',{timeZone:'Asia/Seoul',month:'2-digit',day:'2-digit',...(time?{year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}:{})}).format(new Date(ts*1000));
+  return new Intl.DateTimeFormat('ko-KR',{timeZone:dataset?.timeZone||'Asia/Seoul',month:'2-digit',day:'2-digit',...(time?{year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}:{})}).format(new Date(ts*1000));
 }
 function buildViews(data) {
   const groups=[...new Set(data.buffs.map(b=>b.group))].sort((a,b)=>b-a);
@@ -51,19 +55,21 @@ function initialSelection(data, options, now=Date.now()/1000) {
 }
 function selectedView(){return views.find(v=>v.key===$('group').value)||null;}
 function updateToday(){
-  const node=$('today-date');if(node)node.textContent=`오늘 · ${dateText(Date.now()/1000,true)} KST`;
+  const node=$('today-date');if(node)node.textContent=`오늘 · ${dateText(Date.now()/1000,true)} ${dataset?.serverId==='cn'?'중국 시간 (UTC+8)':'KST'}`;
 }
 function showMessage(text,error=false){$('message').textContent=text;$('message').classList.toggle('error',error);}
-function installData(raw, source) {
+function installData(raw, source, localPreview=false) {
   const next=normalizeData(raw); // Validate before replacing the last successful dataset.
+  if(next.previewOnly&&!localPreview)throw new Error('중국 서버 데이터는 서버 게시용으로 읽을 수 없습니다. JSON 파일 미리보기로만 열어주세요.');
   dataset=next;views=buildViews(next);$('search').value='';
+  $('server-title').textContent=next.serverId==='cn'?'흙먼지 · 중국 서버 전용':'흙먼지 버프 도감';
   $('group').replaceChildren();
-  for(const v of views){const s=v.season;const opt=el('option','',s?`${s.name}${s.start?' · '+dateText(s.start,true).split(' ').slice(0,3).join(' '):''} · 그룹 ${v.group}`:`그룹 ${v.group} · 일정 정보 없음`);opt.value=v.key;$('group').append(opt);}
+  for(const v of views){const s=v.season;const prefix=next.serverId==='cn'?'[중국 전용] ':'';const opt=el('option','',prefix+(s?`${s.name}${s.start?' · '+dateText(s.start,true).split(' ').slice(0,3).join(' '):''} · 그룹 ${v.group}`:`그룹 ${v.group} · 일정 정보 없음`));opt.value=v.key;$('group').append(opt);}
   const initial=initialSelection(next,views);$('group').value=initial.key;activeDay=initial.day;
   $('group').disabled=!views.length;$('search').disabled=!views.length;
   $('total').textContent=next.buffs.length.toLocaleString('ko-KR');
   $('source-note').textContent=source;
-  showMessage(`${source} · ${next.buffs.length.toLocaleString('ko-KR')}개 버프${next.region?' · '+next.region.toUpperCase():''}${next.exportedAt?' · 추출 '+next.exportedAt:''}`);
+  showMessage(`${source}${next.serverId==='cn'?' · 중국 서버 전용 / 내 브라우저에서만 표시':''} · ${next.buffs.length.toLocaleString('ko-KR')}개 버프${next.region?' · '+next.region.toUpperCase():''}${next.exportedAt?' · 추출 '+next.exportedAt:''}`);
   render();
 }
 function filteredBuffs(){
@@ -88,7 +94,7 @@ function render(){
   $('season-info').replaceChildren();$('season-info').hidden=!view;
   if(s){
     if(s.description)$('season-info').append(el('p','','시즌 효과 · '+s.description));
-    if(s.start){const until=s.boundary1||s.end;$('season-info').append(el('p','timing',`${dateText(s.start,true)} 시작${until?' / '+dateText(until,true)+' 종료 경계':''} · KST`));}
+    if(s.start){const until=s.boundary1||s.end;$('season-info').append(el('p','timing',`${dateText(s.start,true)} 시작${until?' / '+dateText(until,true)+' 종료 경계':''} · ${dataset.serverId==='cn'?'중국 시간 (UTC+8)':'KST'}`));}
   }else if(view){$('season-info').append(el('p','timing','이 JSON에는 시즌 효과와 일정이 없습니다. 새 버전의 PC 뷰어에서 다시 저장하면 오늘 시즌·일차가 자동으로 표시됩니다.'));}
   const matches=filteredBuffs();
   $('result-title').textContent=activeDay==='all'?'전체 일차':`${activeDay}일차 버프`;
@@ -125,7 +131,7 @@ async function loadServer(){
 $('group').onchange=()=>{const v=selectedView(),day=currentDay(v?.season);activeDay=day&&dataset.buffs.some(b=>b.group===v.group&&b.day===day)?String(day):'all';render();};$('search').oninput=render;$('reload').onclick=loadServer;
 $('file').onchange=async event=>{
   const file=event.target.files[0];if(!file)return;const id=++requestId;$('reload').disabled=false;
-  try{if(file.size>MAX_SIZE)throw new Error('12MB 이하 JSON 파일을 선택하세요.');const text=await file.text();if(id!==requestId)return;installData(JSON.parse(text.replace(/^\uFEFF/,'')),`로컬 미리보기 · ${file.name}`);$('file-name').textContent=file.name;}
+  try{if(file.size>MAX_SIZE)throw new Error('12MB 이하 JSON 파일을 선택하세요.');const text=await file.text();if(id!==requestId)return;installData(JSON.parse(text.replace(/^\uFEFF/,'')),`로컬 미리보기 · ${file.name}`,true);$('file-name').textContent=file.name;}
   catch(err){if(id===requestId)showMessage((err instanceof SyntaxError?'JSON 문법을 확인해 주세요.':err.message)+(dataset?' 이전 데이터를 계속 표시합니다.':''),true);}
 };
 // Optional structured access for browsers that support WebMCP.
