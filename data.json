@@ -1,7 +1,9 @@
 {
-  "schema_version": 2,
-  "exported_at": "2026-10-01T13:14:32+09:00",
+  "schema_version": 4,
+  "server_id": "kr",
   "region": "kr",
+  "preview_only": false,
+  "timezone": "Asia/Seoul",
   "season": null,
   "seasons": [
     {
